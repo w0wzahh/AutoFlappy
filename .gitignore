@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Training artifacts (regenerable — see GitHub Releases for snapshots)
+logs/
+models/ga_checkpoint.npz
+
+# Playwright / browser leftovers
+nul
+*.log.tmp
+
+# Reverse-engineering scratch dumps (site bundle copies — never commit)
+_*.js
+_*.html
+_*.txt
+:TEMP*
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
