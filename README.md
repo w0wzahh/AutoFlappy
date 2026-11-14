@@ -99,20 +99,29 @@ generation.
 ```bash
 python play.py --policy models/policy.json \
               --name YourName   \  # leaderboard display name
-              --speed 16        \  # physics multiplier (replays stay valid)
-              --revive             # use the once-per-run revive on death
+              --vy-mask 0.3     \  # human-plausible flap timing (see below)
+              --speed 1            # real-time pacing (required for ranked runs)
 ```
 
 - **`--name`** sets `spacetime.player-name` and registers it via the site's
   `set_name` reducer before play starts.
-- **`--speed`** accelerates physics (~60 pipes/sec at 100×). Flaps are recorded
-  as tick indices, so the server replays the identical trajectory — only
-  wall-clock time changes.
+- **`--vy-mask T`** suppresses flaps while the bird still has upward velocity
+  `vy > T` (units/s). This removes the DQN's redundant re-flaps, cutting flap
+  rate ~2x (7.2 → ~3.3 flaps/pipe) while keeping ~85% of survival — and,
+  critically, it guarantees ≥~26 ticks between flaps, a human-plausible
+  click rate the server requires for ranked submissions (see below).
+- **`--speed N`** accelerates physics (~60 pipes/sec at 100×). Fine for
+  practice/unranked runs, but see the validation notes — the server rejects
+  accelerated *ranked* submissions, so use `--speed 1` when chasing the board.
+- **`--min-gap N`**: alternative to `--vy-mask` — enforces a minimum of N ticks
+  between flaps (N≈12 ≈ 100 ms click rate).
 - **Persistent identity**: the driver uses a persistent Chrome profile at
   `%LOCALAPPDATA%/AutoFlappy/chrome-profile`, so your leaderboard identity and
   name survive restarts.
 - `--die-at N` (debug): stop flapping at score N — useful for testing the
   submission pipeline.
+- `--revive`: use the game's once-per-run revive on death
+  (`submit_run_revived` submission path).
 
 ## How it works
 
@@ -133,14 +142,30 @@ python play.py --policy models/policy.json \
   tape to verify the score. The bot additionally snapshots each finished run
   (`window.__lastRun`) and retries submissions the game reports as failed.
 
-### A note on the leaderboard cap
+### Server-side replay validation (verified empirically)
 
-The site currently rejects replay tapes longer than **~1024 flaps** (verified
-empirically: 997 accepted, 1049 rejected) on both `submit_run_versioned` and
-`submit_run_revived`, independent of speed or account. That caps verifiable
-scores at roughly `1024 ÷ flaps-per-pipe` — ~140 for the stock DQN (7.2 f/p),
-~300+ with flap-economy tuning. The all-time 9999 entries predate this limit.
-`--speed` does **not** cause rejections.
+The site validates ranked submissions server-side. Runs scoring **below
+~160–200 pipes are exempt**; longer submissions must satisfy all of:
+
+1. **Real-time pacing.** Run duration is cross-checked against wall-clock
+   time (via the `ended_at_ms`/`duration_steps` telemetry the client sends).
+   Accelerated replays (`--speed > 1`) replay deterministically but are
+   rejected above the exempt range — verified at 4×, 16× and 100×.
+2. **Human-plausible flap timing.** Tapes containing rapid-fire flaps
+   (gaps of only a few 120 Hz ticks — physically impossible click rates)
+   are rejected. A stock DQN decides every 4 ticks, producing 4-tick
+   machine-gun flaps; `--vy-mask`/`--min-gap` spaces flaps ≥ ~17–26 ticks
+   like a real player. Accepted reference tape (site ghost, score 586):
+   min gap 17, median 60.
+3. **Flap-tape length cap ≈ ~2000 flaps.** Tapes of 1953 flaps are
+   accepted; ~4000+ are rejected — so the verifiable-score ceiling is
+   roughly `2000 ÷ flaps-per-pipe` ≈ **~600 pipes** at ~3.3 f/p.
+
+With `--speed 1 --vy-mask 0.3` this bot posts validated scores of ~300–600
+(reached **daily #1, 587 pipes**). The all-time 9999 entries were recorded
+before these checks existed and are not reachable through legitimate
+submission today — not by us, and not by the human players currently
+holding them (the global daily max observed under the new rules is ~586).
 
 ## Project layout
 

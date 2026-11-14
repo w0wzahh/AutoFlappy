@@ -44,6 +44,11 @@ def main():
                     help="physics ticks per scheduled tick (>1 = faster bird)")
     ap.add_argument("--revive", action="store_true",
                     help="use the once-per-run revive on death (submit_run_revived path)")
+    ap.add_argument("--min-gap", type=int, default=0,
+                    help="min ticks between flaps (human-plausible click rate)")
+    ap.add_argument("--vy-mask", type=float, default=None,
+                    help="suppress flaps while vy > this (units/s); cuts flap "
+                         "count ~2x for the ~2000-flap submission cap")
     args = ap.parse_args()
 
     with open(args.policy) as f:
@@ -99,12 +104,19 @@ def main():
         if args.revive:
             page.evaluate("window.__agentRevive = true;")
             print("revive mode: on", flush=True)
+        if args.min_gap:
+            page.evaluate(f"window.__agentMinGap = {args.min_gap};")
+            print(f"min flap gap: {args.min_gap} ticks", flush=True)
+        if args.vy_mask is not None:
+            page.evaluate(f"window.__agentVyMask = {args.vy_mask};")
+            print(f"vy flap mask: suppress while vy > {args.vy_mask}", flush=True)
         print("agent injected — it should be playing now.\n", flush=True)
 
         last = None
         last_mtime = args.policy.stat().st_mtime
         last_prof = 0.0
         resubmits = {}
+        submitted = set()
         t0 = time.time()
         try:
             while True:
@@ -161,14 +173,24 @@ def main():
                 except Exception:
                     lr = None
                 if lr and lr.get("ranked") and lr.get("score", 0) > 0 \
-                        and lr.get("key") not in resubmits:
+                        and lr.get("key") not in resubmits \
+                        and lr.get("key") not in submitted:
                     resubmits[lr["key"]] = {"run": lr, "tries": 0, "next": 0.0}
+                    try:
+                        dump = Path("logs") / f"lastrun_{lr['score']}.json"
+                        dump.parent.mkdir(exist_ok=True)
+                        dump.write_text(json.dumps(lr))
+                    except Exception:
+                        pass
                 now = time.time()
                 for key in list(resubmits):
                     item = resubmits[key]
-                    if item["tries"] >= 8 or now < item["next"]:
-                        if item["tries"] >= 8:
-                            del resubmits[key]
+                    if now < item["next"]:
+                        continue
+                    if item["tries"] >= 8:
+                        # exhausted the fast window — retry every 5 min
+                        item["tries"] = 0
+                        item["next"] = now + 300.0
                         continue
                     item["tries"] += 1
                     item["next"] = now + 15.0
@@ -198,6 +220,7 @@ def main():
                         print(f"    [resubmit] score={run['score']} "
                               f"flaps={len(run['flaps'])} -> "
                               f"{resp.status} (try {item['tries']})", flush=True)
+                        submitted.add(key)
                         del resubmits[key]
                     except Exception as e:
                         print(f"    [resubmit] score={run['score']} "

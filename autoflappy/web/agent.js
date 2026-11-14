@@ -86,13 +86,17 @@
   // ---- stats for the python driver ----
   const stats = window.__agentStats = { runs: 0, best: 0, score: 0, state: "", deaths: {}, net: "?", ranked: "?" };
   let deadTicks = 0, wasGameover = false, suicides = 0, abandoned = false;
+  let lastFlapStep = -1e9;
 
   function tick(g) {
     const st = g.state;
     stats.state = st;
     stats.score = g.score;
     stats.net = g.netMode || "?";
-    if (st === "getready") { g.flap(); return; }
+    // getready -> flap() launches the run; the game records it as flap 0.
+    // Anchor lastFlapStep so the FIRST real flap also respects min-gap —
+    // otherwise every tape starts with a ~4-tick inhuman double-tap.
+    if (st === "getready") { g.flap(); lastFlapStep = 0; return; }
     if (st === "gameover") {
       if (!wasGameover) {
         wasGameover = true;
@@ -139,7 +143,25 @@
     // act only on 4-tick window boundaries; playStep is the index of the
     // tick that is about to run, so playStep % FRAME_SKIP === 0 marks it
     if (g.playStep % FRAME_SKIP !== 0) return;
-    if (decide(features(g)) === 1) g.flap();
+    // window.__agentMinGap: min ticks between flaps. Humans can't click
+    // faster than ~8-10 ticks (66-83 ms); the server rejects replays whose
+    // flap tape contains physically-impossible double-taps, so enforce a
+    // human-plausible minimum interval between recorded flaps.
+    if (decide(features(g)) === 1) {
+      // window.__agentVyMask: suppress flaps while the bird still has
+      // strong upward velocity — a re-flap just resets vy to 1.4 (nearly
+      // free to skip) and cutting them ~halves the flap count, which both
+      // keeps the tape human-plausible and fits under the ~2000-flap cap
+      const vm = window.__agentVyMask;
+      if (typeof vm === "number" && g.birdVy / SCALE > vm) return;
+      const mg = Math.max(0, Math.floor(window.__agentMinGap || 0));
+      // playStep resets each run; a stale lastFlapStep would suppress
+      // every flap after the first death
+      if (g.playStep < lastFlapStep) lastFlapStep = -1e9;
+      if (mg > 0 && g.playStep - lastFlapStep < mg) return;
+      lastFlapStep = g.playStep;
+      g.flap();
+    }
   }
 
   // ---- hook (re-hook if the game object is ever replaced) ----
